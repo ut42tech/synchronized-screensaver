@@ -1,5 +1,7 @@
 # 🖥️ Synchronized Screensaver
 
+**[🇯🇵 日本語版 README](docs/README.ja.md)**
+
 > Time-synced full-screen video playback across multiple devices — no server communication required.
 
 Multiple Macs (or any device with a web browser) play the **same video at exactly the same position** by calculating the playback offset from the current UTC time. Designed to run as a macOS screensaver via [WebViewScreenSaver](https://github.com/nickthedude/WebViewScreenSaver).
@@ -10,7 +12,7 @@ Multiple Macs (or any device with a web browser) play the **same video at exactl
 currentTime = (Date.now() / 1000) % video.duration
 ```
 
-Every device independently computes where in the video loop it should be, based on the wall clock. No WebSocket, no signaling server — just synchronized clocks.
+Every device independently computes where in the video loop it should be, based on the system clock. No WebSocket, no signaling server — just synchronized clocks.
 
 A **drift correction** runs every 10 minutes to compensate for browser timing inaccuracies during long sessions.
 
@@ -32,7 +34,7 @@ Open `http://localhost:5173` in multiple tabs — playback is already synchroniz
 
 Deploy your own instance with one click:
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fut42tech%2Fsynchronized-screensaver)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/ut42tech/synchronized-screensaver)
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/ut42tech/synchronized-screensaver)
 
 ## 🏠 LAN Deployment (Docker)
