@@ -1,47 +1,65 @@
 <script lang="ts">
-  import svelteLogo from './assets/svelte.svg'
-  import viteLogo from '/vite.svg'
-  import Counter from './lib/Counter.svelte'
+  /**
+   * Synchronized Screensaver
+   *
+   * Plays a full-screen video synchronized across multiple devices
+   * by aligning playback position to the current wall-clock time.
+   *
+   * Sync formula:
+   *   currentTime = (Date.now() / 1000) % video.duration
+   */
+
+  // ── Configuration ──────────────────────────────────────────────
+  const VIDEO_SRC = '/videos/sample.mp4';
+  const RESYNC_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
+  // ── State ──────────────────────────────────────────────────────
+  let videoEl: HTMLVideoElement;
+
+  /**
+   * Calculate the expected playback position from the current UTC
+   * time and force the video element to that position.
+   */
+  function syncPlayback(): void {
+    if (!videoEl || !videoEl.duration || isNaN(videoEl.duration)) return;
+
+    const nowSec = Date.now() / 1000;
+    const targetTime = nowSec % videoEl.duration;
+    videoEl.currentTime = targetTime;
+  }
+
+  /** Called once video metadata (duration) is available. */
+  function onLoadedMetadata(): void {
+    syncPlayback();
+    videoEl.play().catch(() => {
+      // Autoplay may be blocked; muted + autoplay attribute should suffice.
+    });
+  }
+
+  // Periodic drift correction
+  $effect(() => {
+    const id = setInterval(syncPlayback, RESYNC_INTERVAL_MS);
+    return () => clearInterval(id);
+  });
 </script>
 
-<main>
-  <div>
-    <a href="https://vite.dev" target="_blank" rel="noreferrer">
-      <img src={viteLogo} class="logo" alt="Vite Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank" rel="noreferrer">
-      <img src={svelteLogo} class="logo svelte" alt="Svelte Logo" />
-    </a>
-  </div>
-  <h1>Vite + Svelte</h1>
-
-  <div class="card">
-    <Counter />
-  </div>
-
-  <p>
-    Check out <a href="https://github.com/sveltejs/kit#readme" target="_blank" rel="noreferrer">SvelteKit</a>, the official Svelte app framework powered by Vite!
-  </p>
-
-  <p class="read-the-docs">
-    Click on the Vite and Svelte logos to learn more
-  </p>
-</main>
+<video
+  bind:this={videoEl}
+  src={VIDEO_SRC}
+  onloadedmetadata={onLoadedMetadata}
+  autoplay
+  loop
+  muted
+  playsinline
+></video>
 
 <style>
-  .logo {
-    height: 6em;
-    padding: 1.5em;
-    will-change: filter;
-    transition: filter 300ms;
-  }
-  .logo:hover {
-    filter: drop-shadow(0 0 2em #646cffaa);
-  }
-  .logo.svelte:hover {
-    filter: drop-shadow(0 0 2em #ff3e00aa);
-  }
-  .read-the-docs {
-    color: #888;
+  video {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 </style>

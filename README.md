@@ -1,47 +1,93 @@
-# Svelte + TS + Vite
+# 🖥️ Synchronized Screensaver
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+> Time-synced full-screen video playback across multiple devices — no server communication required.
 
-## Recommended IDE Setup
+Multiple Macs (or any device with a web browser) play the **same video at exactly the same position** by calculating the playback offset from the current UTC time. Designed to run as a macOS screensaver via [WebViewScreenSaver](https://github.com/nickthedude/WebViewScreenSaver).
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+## ✨ How It Works
 
-## Need an official Svelte framework?
-
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
-
-## Technical considerations
-
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
-
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `allowJs` in the TS template?**
-
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
 ```
+currentTime = (Date.now() / 1000) % video.duration
+```
+
+Every device independently computes where in the video loop it should be, based on the wall clock. No WebSocket, no signaling server — just synchronized clocks.
+
+A **drift correction** runs every 10 minutes to compensate for browser timing inaccuracies during long sessions.
+
+## 🚀 Quick Start
+
+```bash
+# Clone & install
+git clone https://github.com/ut42tech/synchronized-screensaver.git
+cd synchronized-screensaver
+pnpm install
+
+# Start dev server
+pnpm run dev
+```
+
+Open `http://localhost:5173` in multiple tabs — playback is already synchronized.
+
+## ☁️ Deploy to Cloud
+
+Deploy your own instance with one click:
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fut42tech%2Fsynchronized-screensaver)
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/ut42tech/synchronized-screensaver)
+
+## 🏠 LAN Deployment (Docker)
+
+For lab/office environments where all devices are on the same network:
+
+```bash
+# Build the app
+pnpm run build
+
+# Start Nginx container
+docker compose up -d
+```
+
+All clients on the LAN can access `http://<server-ip>/` and will play in perfect sync.
+
+### Updating the Video
+
+Simply replace the file in `public/videos/` and restart:
+
+```bash
+cp /path/to/new-promo.mp4 public/videos/sample.mp4
+docker compose restart
+```
+
+## 🍎 macOS Screensaver Setup
+
+1. Install [WebViewScreenSaver](https://github.com/nickthedude/WebViewScreenSaver)
+2. Open **System Settings → Screen Saver**
+3. Select **WebViewScreenSaver**
+4. Set the URL to your deployment (e.g. `http://192.168.1.100/`)
+5. Adjust idle timeout and display sleep settings as needed
+
+## 🎬 Using Your Own Video
+
+1. Place your MP4 file in `public/videos/`
+2. Update `VIDEO_SRC` in `src/App.svelte`:
+   ```ts
+   const VIDEO_SRC = "/videos/your-video.mp4";
+   ```
+3. Rebuild if using Docker: `pnpm run build && docker compose up -d --build`
+
+> [!TIP]
+> Large production videos are excluded from Git by default (`.gitignore`).
+> The included `sample.mp4` (31 KB) is a lightweight placeholder for development.
+
+## 🛠️ Tech Stack
+
+| Layer         | Technology                          |
+| ------------- | ----------------------------------- |
+| Frontend      | Vite + Svelte 5 (TypeScript)        |
+| LAN Hosting   | Docker Compose + Nginx              |
+| Cloud Hosting | Vercel / Netlify / Cloudflare Pages |
+| Client        | macOS + WebViewScreenSaver          |
+
+## 📄 License
+
+[MIT](LICENSE)

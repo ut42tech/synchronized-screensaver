@@ -1,0 +1,10 @@
+services:
+  web:
+    build: .
+    ports:
+      - "80:80"
+    volumes:
+      # Mount local videos directory to replace/add production videos
+      # without rebuilding the container
+      - ./public/videos:/usr/share/nginx/html/videos
+    restart: unless-stopped

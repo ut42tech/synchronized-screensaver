@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Production videos (large files)
+public/videos/*.mp4
+# Keep the lightweight sample for development
+!public/videos/sample.mp4
