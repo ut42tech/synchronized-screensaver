@@ -51,12 +51,14 @@ All clients on the LAN can access `http://<server-ip>/` and will play in perfect
 
 ### Updating the Video
 
-Simply replace the file in `public/videos/` and restart:
+Simply add or replace `.mp4` files in `public/videos/` and restart:
 
 ```bash
-cp /path/to/new-promo.mp4 public/videos/sample.mp4
+cp /path/to/new-promo.mp4 public/videos/
 docker compose restart
 ```
+
+The app automatically discovers all `.mp4` files in the videos directory — no code changes required.
 
 ## 🍎 macOS Screensaver Setup
 
@@ -68,16 +70,13 @@ docker compose restart
 
 ## 🎬 Using Your Own Video
 
-1. Place your MP4 file in `public/videos/`
-2. Update `VIDEO_SRC` in `src/App.svelte`:
-   ```ts
-   const VIDEO_SRC = "/videos/your-video.mp4";
-   ```
-3. Rebuild if using Docker: `pnpm run build && docker compose up -d --build`
+1. Place your `.mp4` file(s) in `public/videos/`
+2. Rebuild if using Docker: `pnpm run build && docker compose up -d --build`
+
+The app automatically discovers the first `.mp4` file (alphabetically) in the directory.
 
 > [!TIP]
 > Large production videos are excluded from Git by default (`.gitignore`).
-> The included `sample.mp4` (31 KB) is a lightweight placeholder for development.
 
 ## 🛠️ Tech Stack
 

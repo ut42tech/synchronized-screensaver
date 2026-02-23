@@ -10,11 +10,62 @@
    */
 
   // ── Configuration ──────────────────────────────────────────────
-  const VIDEO_SRC = '/videos/sample.mp4';
+  const VIDEO_DIR = '/videos/';
   const RESYNC_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
   // ── State ──────────────────────────────────────────────────────
-  let videoEl: HTMLVideoElement;
+  // svelte-ignore non_reactive_update
+    let videoEl: HTMLVideoElement;
+  let videoSrc = $state('');
+
+  /**
+   * Discover video files from the /videos/ directory.
+   * Uses nginx autoindex (JSON format) in production,
+   * falls back to a known manifest endpoint for development.
+   */
+  async function discoverVideos(): Promise<string[]> {
+    try {
+      const res = await fetch(VIDEO_DIR);
+      const contentType = res.headers.get('content-type') || '';
+
+      if (contentType.includes('application/json')) {
+        // nginx autoindex JSON response
+        const entries: { name: string; type: string }[] = await res.json();
+        return entries
+          .filter((e) => e.type === 'file' && /\.mp4$/i.test(e.name))
+          .map((e) => `${VIDEO_DIR}${e.name}`)
+          .sort();
+      }
+
+      // Fallback: parse HTML directory listing
+      const html = await res.text();
+      const matches = html.match(/href="([^"]+\.mp4)"/gi) || [];
+      return matches
+        .map((m) => {
+          const name = m.match(/href="([^"]+)"/i)?.[1] || '';
+          return name.startsWith('/') ? name : `${VIDEO_DIR}${name}`;
+        })
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Initialize: discover videos and set the first one as source.
+   */
+  async function init(): Promise<void> {
+    const videos = await discoverVideos();
+    if (videos.length > 0) {
+      videoSrc = videos[0];
+    } else {
+      // Fallback to a sensible default if discovery fails
+      console.warn('No videos discovered, falling back to default.');
+      videoSrc = `${VIDEO_DIR}sample.mp4`;
+    }
+  }
+
+  init();
 
   /**
    * Calculate the expected playback position from the current UTC
@@ -43,15 +94,17 @@
   });
 </script>
 
+{#if videoSrc}
 <video
   bind:this={videoEl}
-  src={VIDEO_SRC}
+  src={videoSrc}
   onloadedmetadata={onLoadedMetadata}
   autoplay
   loop
   muted
   playsinline
 ></video>
+{/if}
 
 <style>
   video {
