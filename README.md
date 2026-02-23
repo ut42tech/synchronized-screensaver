@@ -9,12 +9,14 @@ Multiple Macs (or any device with a web browser) play the **same video at exactl
 ## ✨ How It Works
 
 ```
-currentTime = (Date.now() / 1000) % video.duration
+targetTime = (Date.now() / 1000) % video.duration
 ```
 
 Every device independently computes where in the video loop it should be, based on the system clock. No WebSocket, no signaling server — just synchronized clocks.
 
-A **drift correction** runs every 10 minutes to compensate for browser timing inaccuracies during long sessions.
+**Drift correction** — every 10 seconds, drift is checked and corrected via seek when it exceeds 100ms. No `playbackRate` manipulation for maximum cross-browser compatibility.
+
+Clients opened late **wait on a black screen** until initial sync is confirmed, then fade in.
 
 ## 🚀 Quick Start
 
