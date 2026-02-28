@@ -1,45 +1,17 @@
 /**
  * Wall-clock video synchronization engine.
  *
- * Keeps a `<video>` element's playback position aligned to
- * `(Date.now() / 1000) % duration` using a **proportional rate
- * controller** — no hard seeks during playback, so WebKit never
- * flushes its decode pipeline and playback never stutters.
+ * Synchronizes video playback across devices using wall-clock
+ * loop boundaries — **zero corrections during playback**.
  *
- *   - Tiny drift (< 50 ms)  → ignore (rate = 1.0)
- *   - Any larger drift       → proportional playbackRate nudge
+ * Strategy:
+ *   1. Initial load  → seek to current wall-clock position → play
+ *   2. On `ended`    → seek to frame 0, wait for next loop boundary → play
+ *   3. During playback → no corrections at all
  *
- * Formula:  newRate = clamp(1 + drift × GAIN, RATE_MIN, RATE_MAX)
- *
- * Pauses automatically when the tab is hidden and re-syncs
- * (hard seek — acceptable since the tab was invisible) on return.
+ * Loop boundaries are defined by:
+ *   boundary_n = n × duration  (wall-clock seconds since epoch)
  */
-
-// ── Configuration ───────────────────────────────────────────────
-
-/** Drift below this is imperceptible — do nothing. */
-const DRIFT_IGNORE = 0.05; // 50 ms
-
-/**
- * Proportional gain: how aggressively to correct.
- * Stability constraint: GAIN ≤ 1 / CHECK_INTERVAL_S = 0.5.
- * We use 0.4 for a comfortable stability margin (~80% correction per step).
- */
-const GAIN = 0.4;
-
-/** playbackRate bounds — wide enough to correct large drifts smoothly. */
-const RATE_MIN = 0.5;
-const RATE_MAX = 1.5;
-
-/** How often to run drift correction (ms). */
-const CHECK_INTERVAL_MS = 2_000;
-
-export interface SyncOptions {
-  /** Drift below which no correction occurs (default: 0.05 s). */
-  driftIgnore?: number;
-  /** Proportional gain for rate correction (default: 0.4). */
-  gain?: number;
-}
 
 // ── Pure helpers ────────────────────────────────────────────────
 
@@ -48,151 +20,105 @@ export function getTargetTime(duration: number): number {
   return (Date.now() / 1000) % duration;
 }
 
-/**
- * Signed drift (seconds) between actual and expected position.
- * Positive = behind (needs to speed up), negative = ahead.
- * Handles the loop-boundary wrap-around correctly.
- */
-export function computeDrift(currentTime: number, duration: number): number {
-  const target = (Date.now() / 1000) % duration;
-  const raw = target - currentTime;
-
-  // Wrap-around: shortest correction path may cross the loop boundary.
-  if (raw > duration * 0.5) return raw - duration;
-  if (raw < duration * -0.5) return raw + duration;
-  return raw;
-}
-
 // ── Controller ──────────────────────────────────────────────────
 
 /**
  * Attach the sync engine to a `<video>` element.
  *
- * Performs an initial seek (while video is invisible), starts
- * playback, and continuously corrects drift using only
- * `playbackRate` — never setting `currentTime` during playback.
+ * Performs an initial seek (to current wall-clock position) and
+ * starts playback immediately. Subsequent loops are aligned to
+ * wall-clock boundaries with zero in-playback corrections.
  *
  * @returns `cleanup` — call to stop the sync loop.
  */
 export async function startSync(
   video: HTMLVideoElement,
-  opts: SyncOptions = {},
 ): Promise<{ cleanup: () => void }> {
-  const ignoreThreshold = opts.driftIgnore ?? DRIFT_IGNORE;
-  const gain = opts.gain ?? GAIN;
-
-  // Cache duration — doesn't change for a looping video.
   const dur = video.duration;
+  let stopped = false;
+  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Initial sync (hard seek is safe — video is invisible) ──
-  await seekToTarget(video, dur);
-
-  // Fine-tune: the first seek may have taken time.
-  if (Math.abs(computeDrift(video.currentTime, dur)) >= ignoreThreshold) {
-    await seekToTarget(video, dur);
-  }
+  // ── Initial sync: seek to current position → play immediately ──
+  video.currentTime = getTargetTime(dur);
+  await new Promise<void>((resolve) =>
+    video.addEventListener("seeked", () => resolve(), { once: true }),
+  );
 
   try {
     await video.play();
   } catch {
-    // Autoplay blocked — muted + autoplay attr should handle this.
+    // Autoplay blocked — muted + playsinline should handle this.
   }
 
   console.debug(
-    "[sync] initial drift:",
-    Math.round(Math.abs(computeDrift(video.currentTime, dur)) * 1000) + "ms",
+    "[sync] initial play at",
+    video.currentTime.toFixed(2) + "s",
+    "/ " + dur.toFixed(2) + "s",
   );
 
-  // ── Proportional rate correction ──────────────────────────
+  // ── Loop boundary scheduling ──────────────────────────────
 
-  function correct(): void {
-    if (video.paused) return;
+  function scheduleNextLoop(): void {
+    if (stopped) return;
 
-    const drift = computeDrift(video.currentTime, dur);
-    const absDrift = drift > 0 ? drift : -drift;
+    // Seek to frame 0 (video is paused after 'ended').
+    video.currentTime = 0;
 
-    if (absDrift < ignoreThreshold) {
-      // Drift is negligible — reset rate if we were adjusting.
-      if (video.playbackRate !== 1) video.playbackRate = 1;
-      return;
-    }
+    const nowSec = Date.now() / 1000;
+    const elapsed = nowSec % dur;
+    const remaining = dur - elapsed;
 
-    // Proportional correction: rate scales linearly with drift.
-    // Never touches video.currentTime → zero stutter in WebKit.
-    const rawRate = 1 + drift * gain;
-    const newRate =
-      rawRate > RATE_MAX ? RATE_MAX : rawRate < RATE_MIN ? RATE_MIN : rawRate;
+    // Pick the shortest path to a boundary:
+    //   elapsed ≤ remaining  → we just passed a boundary → play now
+    //   remaining < elapsed  → the next boundary is closer → wait
+    const waitMs = elapsed <= remaining ? 0 : remaining * 1000;
 
-    // Only write if the value actually changed (avoids WebKit layout thrash).
-    const rateDelta = video.playbackRate - newRate;
-    if (rateDelta > 0.001 || rateDelta < -0.001) {
-      video.playbackRate = newRate;
-      console.debug(
-        "[sync] rate:",
-        newRate.toFixed(3),
-        "drift:",
-        Math.round(absDrift * 1000) + "ms",
-      );
+    console.debug("[sync] loop boundary wait:", Math.round(waitMs) + "ms");
+
+    if (waitMs < 16) {
+      // Less than one frame — play synchronously to avoid setTimeout jitter.
+      video.play().catch(() => {});
+    } else {
+      pendingTimer = setTimeout(() => {
+        if (stopped) return;
+        pendingTimer = null;
+        video.play().catch(() => {});
+      }, waitMs);
     }
   }
 
-  // ── Timer lifecycle ───────────────────────────────────────
+  // ── Event handlers ────────────────────────────────────────
 
-  let timer: ReturnType<typeof setInterval> | null = null;
-
-  function startTimer(): void {
-    if (timer !== null) return;
-    timer = setInterval(correct, CHECK_INTERVAL_MS);
+  function onEnded(): void {
+    scheduleNextLoop();
   }
-
-  function stopTimer(): void {
-    if (timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-  }
-
-  // ── Visibility-aware pause / resume ───────────────────────
 
   function onVisibilityChange(): void {
     if (document.hidden) {
-      stopTimer();
-    } else {
-      // Tab became visible — hard seek is acceptable here because
-      // the tab was invisible, so the brief decode stall is hidden
-      // behind the browser's own tab-switching recomposition.
-      video.currentTime = (Date.now() / 1000) % dur;
-      if (video.paused) {
-        video.play().catch(() => {});
+      // Tab hidden → cancel pending timer, pause video.
+      if (pendingTimer !== null) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
       }
-      startTimer();
+      video.pause();
+    } else {
+      // Tab visible → re-sync to current wall-clock position.
+      video.currentTime = getTargetTime(dur);
+      video.play().catch(() => {});
     }
   }
 
+  video.addEventListener("ended", onEnded);
   document.addEventListener("visibilitychange", onVisibilityChange);
 
-  // Start the correction timer.
-  startTimer();
-
-  // ── Unified cleanup ───────────────────────────────────────
+  // ── Cleanup ───────────────────────────────────────────────
 
   return {
     cleanup(): void {
-      stopTimer();
+      stopped = true;
+      if (pendingTimer !== null) clearTimeout(pendingTimer);
+      video.removeEventListener("ended", onEnded);
       document.removeEventListener("visibilitychange", onVisibilityChange);
-      if (video.playbackRate !== 1) video.playbackRate = 1;
     },
   };
-}
-
-// ── Internal ────────────────────────────────────────────────────
-
-function seekToTarget(
-  video: HTMLVideoElement,
-  duration: number,
-): Promise<void> {
-  return new Promise((resolve) => {
-    video.currentTime = (Date.now() / 1000) % duration;
-    video.addEventListener("seeked", () => resolve(), { once: true });
-  });
 }

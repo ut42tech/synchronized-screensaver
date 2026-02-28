@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { discoverVideos } from './lib/discoverVideos';
+  import { discoverVideos, cacheVideo } from './lib/discoverVideos';
   import { startSync } from './lib/sync';
 
   const VIDEO_DIR = '/videos/';
@@ -18,12 +18,10 @@
 
   async function init(): Promise<void> {
     const videos = await discoverVideos(VIDEO_DIR);
-    if (videos.length > 0) {
-      videoSrc = videos[0];
-    } else {
-      console.warn('No videos discovered, falling back to default.');
-      videoSrc = `${VIDEO_DIR}sample.mp4`;
-    }
+    const url = videos.length > 0 ? videos[0] : `${VIDEO_DIR}sample.mp4`;
+
+    // Cache the full video file → Blob URL for offline playback.
+    videoSrc = await cacheVideo(url);
   }
 
   init();
@@ -39,8 +37,6 @@
   src={videoSrc}
   onloadedmetadata={onLoadedMetadata}
   class:synced
-  autoplay
-  loop
   muted
   playsinline
   preload="auto"
