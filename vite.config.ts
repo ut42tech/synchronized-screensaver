@@ -39,4 +39,8 @@ function videoDirListing() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [videoDirListing(), svelte()],
+  build: {
+    target: "safari15",
+    cssMinify: true,
+  },
 });

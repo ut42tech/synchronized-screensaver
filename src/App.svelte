@@ -57,7 +57,12 @@
     object-fit: cover;
     opacity: 0;
     transition: opacity 0.3s ease;
-    will-change: transform;
+
+    /* Safari/WebKit GPU compositing — translateZ(0) is more
+       reliable than will-change for promoting to a GPU layer. */
+    transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
   }
 
   video.synced {
