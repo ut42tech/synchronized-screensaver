@@ -2,14 +2,17 @@
  * Wall-clock video synchronization engine.
  *
  * Keeps a `<video>` element's playback position aligned to
- * `(Date.now() / 1000) % duration` using a hybrid correction strategy:
+ * `(Date.now() / 1000) % duration` using a **proportional rate
+ * controller** — no hard seeks during playback, so WebKit never
+ * flushes its decode pipeline and playback never stutters.
  *
- *   - Tiny  drift (< 50 ms)  → ignore
- *   - Small drift (50–300 ms) → gentle playbackRate adjustment
- *   - Large drift (> 300 ms)  → hard seek
+ *   - Tiny drift (< 50 ms)  → ignore (rate = 1.0)
+ *   - Any larger drift       → proportional playbackRate nudge
  *
- * Uses a lightweight `setInterval` loop (0.5 calls/sec) and
- * pauses automatically when the tab is hidden via `visibilitychange`.
+ * Formula:  newRate = clamp(1 + drift × GAIN, RATE_MIN, RATE_MAX)
+ *
+ * Pauses automatically when the tab is hidden and re-syncs
+ * (hard seek — acceptable since the tab was invisible) on return.
  */
 
 // ── Configuration ───────────────────────────────────────────────
@@ -17,13 +20,16 @@
 /** Drift below this is imperceptible — do nothing. */
 const DRIFT_IGNORE = 0.05; // 50 ms
 
-/** Drift between IGNORE and SEEK uses playbackRate adjustment. */
-const DRIFT_SEEK = 0.3; // 300 ms
+/**
+ * Proportional gain: how aggressively to correct.
+ * Stability constraint: GAIN ≤ 1 / CHECK_INTERVAL_S = 0.5.
+ * We use 0.4 for a comfortable stability margin (~80% correction per step).
+ */
+const GAIN = 0.4;
 
-/** playbackRate bounds for gentle catch-up / slow-down. */
-const RATE_MIN = 0.97;
-const RATE_MAX = 1.03;
-const RATE_RANGE = RATE_MAX - 1; // 0.03 — pre-computed
+/** playbackRate bounds — wide enough to correct large drifts smoothly. */
+const RATE_MIN = 0.5;
+const RATE_MAX = 1.5;
 
 /** How often to run drift correction (ms). */
 const CHECK_INTERVAL_MS = 2_000;
@@ -31,8 +37,8 @@ const CHECK_INTERVAL_MS = 2_000;
 export interface SyncOptions {
   /** Drift below which no correction occurs (default: 0.05 s). */
   driftIgnore?: number;
-  /** Drift above which a hard seek is performed (default: 0.3 s). */
-  driftSeek?: number;
+  /** Proportional gain for rate correction (default: 0.4). */
+  gain?: number;
 }
 
 // ── Pure helpers ────────────────────────────────────────────────
@@ -44,14 +50,14 @@ export function getTargetTime(duration: number): number {
 
 /**
  * Signed drift (seconds) between actual and expected position.
+ * Positive = behind (needs to speed up), negative = ahead.
  * Handles the loop-boundary wrap-around correctly.
  */
 export function computeDrift(currentTime: number, duration: number): number {
-  const target = (Date.now() / 1000) % duration; // inline getTargetTime
+  const target = (Date.now() / 1000) % duration;
   const raw = target - currentTime;
 
-  // Wrap-around: if raw drift exceeds half the duration,
-  // the shortest correction path crosses the loop boundary.
+  // Wrap-around: shortest correction path may cross the loop boundary.
   if (raw > duration * 0.5) return raw - duration;
   if (raw < duration * -0.5) return raw + duration;
   return raw;
@@ -62,10 +68,9 @@ export function computeDrift(currentTime: number, duration: number): number {
 /**
  * Attach the sync engine to a `<video>` element.
  *
- * Performs an initial seek, starts playback, and continuously
- * corrects drift using a lightweight `setInterval` loop.
- * Automatically pauses when the tab is hidden and re-syncs
- * on return.
+ * Performs an initial seek (while video is invisible), starts
+ * playback, and continuously corrects drift using only
+ * `playbackRate` — never setting `currentTime` during playback.
  *
  * @returns `cleanup` — call to stop the sync loop.
  */
@@ -74,12 +79,12 @@ export async function startSync(
   opts: SyncOptions = {},
 ): Promise<{ cleanup: () => void }> {
   const ignoreThreshold = opts.driftIgnore ?? DRIFT_IGNORE;
-  const seekThreshold = opts.driftSeek ?? DRIFT_SEEK;
+  const gain = opts.gain ?? GAIN;
 
-  // Cache duration — it won't change for a looping video.
+  // Cache duration — doesn't change for a looping video.
   const dur = video.duration;
 
-  // ── Initial sync (always a hard seek) ─────────────────────
+  // ── Initial sync (hard seek is safe — video is invisible) ──
   await seekToTarget(video, dur);
 
   // Fine-tune: the first seek may have taken time.
@@ -98,14 +103,13 @@ export async function startSync(
     Math.round(Math.abs(computeDrift(video.currentTime, dur)) * 1000) + "ms",
   );
 
-  // ── Correction function ───────────────────────────────────
+  // ── Proportional rate correction ──────────────────────────
 
-  /** Core correction — runs every CHECK_INTERVAL_MS. */
   function correct(): void {
     if (video.paused) return;
 
     const drift = computeDrift(video.currentTime, dur);
-    const absDrift = drift > 0 ? drift : -drift; // avoid Math.abs call
+    const absDrift = drift > 0 ? drift : -drift;
 
     if (absDrift < ignoreThreshold) {
       // Drift is negligible — reset rate if we were adjusting.
@@ -113,28 +117,13 @@ export async function startSync(
       return;
     }
 
-    if (absDrift >= seekThreshold) {
-      // Large drift → hard seek.
-      console.debug(
-        "[sync] hard seek, drift:",
-        Math.round(absDrift * 1000) + "ms",
-        drift > 0 ? "(behind)" : "(ahead)",
-      );
-      video.playbackRate = 1;
-      video.currentTime = (Date.now() / 1000) % dur;
-      return;
-    }
-
-    // Small drift → proportional playbackRate nudge.
-    const factor = absDrift / seekThreshold; // 0 → 1
-    const adjustment = factor * RATE_RANGE; // 0 → 0.03
-
+    // Proportional correction: rate scales linearly with drift.
+    // Never touches video.currentTime → zero stutter in WebKit.
+    const rawRate = 1 + drift * gain;
     const newRate =
-      drift > 0
-        ? Math.min(1 + adjustment, RATE_MAX) // behind → speed up
-        : Math.max(1 - adjustment, RATE_MIN); // ahead  → slow down
+      rawRate > RATE_MAX ? RATE_MAX : rawRate < RATE_MIN ? RATE_MIN : rawRate;
 
-    // Only write if the value actually changed (avoids Safari layout thrash).
+    // Only write if the value actually changed (avoids WebKit layout thrash).
     const rateDelta = video.playbackRate - newRate;
     if (rateDelta > 0.001 || rateDelta < -0.001) {
       video.playbackRate = newRate;
@@ -169,7 +158,9 @@ export async function startSync(
     if (document.hidden) {
       stopTimer();
     } else {
-      // Tab became visible — hard re-seek then restart corrections.
+      // Tab became visible — hard seek is acceptable here because
+      // the tab was invisible, so the brief decode stall is hidden
+      // behind the browser's own tab-switching recomposition.
       video.currentTime = (Date.now() / 1000) % dur;
       if (video.paused) {
         video.play().catch(() => {});
